@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "WebSearch"
+      "WebSearch",
+      "Bash(git -C /Users/ayushgaur/Documents/Fine-tuning ls-files --cached)",
+      "Bash(git:*)",
+      "Bash(python -c \"import gradio; print\\(gradio.__version__\\)\")",
+      "Bash(pip install:*)"
     ]
   }
 }

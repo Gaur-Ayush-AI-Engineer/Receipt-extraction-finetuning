@@ -23,6 +23,8 @@ Fine-tuning **Qwen2.5-3B-Instruct** with LoRA via MLX-LM to extract structured f
 
 All remaining failures after fine-tuning are partial matches — the model always outputs valid JSON and never hallucinates field names.
 
+> **Training loss curve:** MLX-LM does not write a loss log file by default (`report_to: null`). The loss was visible in stdout during training but was not persisted. For future runs, pipe stdout to a file (`mlx_lm.lora --config lora_config.yaml | tee training.log`) or set `report_to: wandb` in `lora_config.yaml` to capture it.
+
 ---
 
 ## Dataset
@@ -35,6 +37,12 @@ Two sources merged into a single dataset (~1950 examples):
 | Synthetic (GPT-4o-mini) | ~970 | Indian receipts with OCR noise, 10 categories, 20 cities |
 
 **Split:** 80% train / 10% valid / 10% test (stratified — test set guaranteed to have examples from both sources and all difficulty levels)
+
+### Dataset Notes
+
+- `darentang/sroie` raises `RuntimeError: Dataset scripts are no longer supported` with modern datasets library — use `rth/sroie-2019-v2` instead
+- `rth/sroie-2019-v2` has an image column that crashes iteration without Pillow — call `remove_columns(["image"])` immediately after load
+- SROIE fields are nested under `objects.entities`, not top-level
 
 ---
 
@@ -102,6 +110,12 @@ All paths and hyperparameters are configured in `config.py` — edit that file, 
 
 ---
 
+## Model Weights
+
+LoRA adapters are published on HuggingFace Hub: **[largetrader/qwen2.5-3b-receipt-extraction-lora](https://huggingface.co/largetrader/qwen2.5-3b-receipt-extraction-lora)**
+
+---
+
 ## Project Structure
 
 ```
@@ -151,4 +165,19 @@ mlx_lm.fuse \
     --model Qwen/Qwen2.5-3B-Instruct \
     --adapter-path ./adapters \
     --save-path ./fused_model
+```
+
+---
+
+## Demo
+
+```bash
+# Run a hardcoded example (1 = easy, 2 = medium OCR noise, 3 = hard/messy)
+python demo.py --example 1
+
+# Extract from a text string
+python demo.py --text "YOUR RECEIPT TEXT HERE"
+
+# Interactive mode — paste text, end with Ctrl+D
+python demo.py
 ```
