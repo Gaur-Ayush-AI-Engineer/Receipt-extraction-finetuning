@@ -1,0 +1,108 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# MLX-LM LoRA Training Config
+# Model  : Qwen/Qwen2.5-3B-Instruct
+# Task   : Structured JSON extraction from receipt OCR text
+# Target : M3 Pro 32GB Mac
+#
+# Usage:
+#   mlx_lm.lora --config lora_config.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+model: "Qwen/Qwen2.5-3B-Instruct"
+
+# ── Data ──────────────────────────────────────────────────────────────────────
+train: true
+data: "./data/final/mlx_format"   # Must contain train.jsonl, valid.jsonl
+# MLX-LM expects chat-format JSONL with "messages" key at top level
+
+# ── Adapter output ────────────────────────────────────────────────────────────
+adapter_path: "./adapters"
+
+# ── Reproducibility ───────────────────────────────────────────────────────────
+seed: 42
+
+# ── LoRA architecture ─────────────────────────────────────────────────────────
+lora_layers: 16
+# Why 16: Qwen2.5-3B has 36 transformer layers. Applying LoRA to the last 16
+# (~44%) covers the layers most responsible for output formatting and reasoning
+# while leaving early embedding layers frozen. More layers = more params = more
+# memory; 16 is a sweet spot for a 3B model on 32GB.
+
+lora_parameters:
+  rank: 8
+  # Why rank 8: The task is highly constrained — 4 fixed output fields with
+  # predictable formats. Rank 8 (~1M trainable params) is expressive enough
+  # to learn this pattern. With ~1000 training examples, higher rank increases
+  # overfitting risk without meaningful quality gain. Rank 16+ is better suited
+  # for open-ended generation or style transfer tasks, not structured extraction.
+
+  alpha: 16
+  # Why alpha=16 (2× rank): Keeps the standard 2× ratio — effective LR for
+  # LoRA weights = (alpha/rank) × optimizer_lr = 2 × 1e-4 = 2e-4. Maintains
+  # sensible gradient scaling without needing to retune the base learning rate.
+
+  dropout: 0.05
+  # Why 0.05: Light regularization. Our dataset is small (~1000 examples after
+  # merge) so dropout helps, but too high (>0.1) hurts convergence on extraction
+  # tasks where the output format is very constrained.
+
+  scale: 10.0
+  # Default MLX-LM scale; controls initialization variance of LoRA weights.
+
+# ── Sequence length ───────────────────────────────────────────────────────────
+max_seq_length: 1024
+# Why 1024: Receipt OCR text is typically 200–600 tokens. System prompt + user
+# message + assistant JSON output comfortably fits in 1024. Going higher wastes
+# memory with no benefit for this task; going lower risks truncating long receipts.
+
+# ── Training duration ─────────────────────────────────────────────────────────
+iters: 1000
+# Why 1000: With ~800 training examples and batch_size=8 → ~100 steps/epoch.
+# 1000 iterations ≈ 10 epochs — enough to converge on a well-defined extraction
+# task without overfitting. Monitor valid loss; stop early if it rises.
+
+# ── Batch size ────────────────────────────────────────────────────────────────
+batch_size: 8
+# Why 8: 3B model in bfloat16 ≈ 6GB weights. With LoRA adapters + optimizer
+# states + activations at batch 8 and seq_len 1024 → ~18–22GB peak. Leaves
+# comfortable headroom on 32GB. Larger batches give more stable gradients for
+# extraction tasks.
+
+# ── Gradient checkpointing ────────────────────────────────────────────────────
+grad_checkpoint: true
+# Why true: Trades compute for memory — recomputes activations during backward
+# pass instead of storing them. Cuts activation memory ~4×, enabling batch_size=8
+# at seq_len=1024. Essential on Apple Silicon where GPU/CPU share the same pool.
+
+# ── Learning rate & schedule ──────────────────────────────────────────────────
+learning_rate: 1e-4
+# Why 1e-4: Standard LoRA learning rate for instruction-tuned models. Higher
+# (>3e-4) causes loss spikes on Qwen2.5; lower (<3e-5) converges too slowly
+# within 1000 iters.
+
+lr_schedule:
+  name: cosine_decay
+  warmup: 100
+  # Why 100 warmup steps: ~10% of total iters. Prevents large gradient updates
+  # in early training when LoRA weights are randomly initialized. Critical for
+  # stability when fine-tuning an already-instruction-tuned model.
+  arguments: [1e-4, 1000]
+  # Cosine decay from 1e-4 → ~0 over 1000 steps. Gentle final-phase LR
+  # prevents overshooting the loss minimum at the end of training.
+
+# ── Evaluation & logging ──────────────────────────────────────────────────────
+steps_per_eval: 100
+# Evaluate on valid set every 100 steps (~1 epoch). Frequent enough to catch
+# overfitting early without slowing training significantly.
+
+steps_per_report: 10
+# Print train loss every 10 steps — enough resolution to spot divergence fast.
+
+val_batches: 25
+# Use 25 validation batches per eval pass. With batch_size=8 → 200 examples,
+# which covers the full valid split (~100–150 examples) with some overlap.
+
+save_every: 100
+# Save adapter checkpoint every 100 steps. Lets you resume or pick the best
+# checkpoint if valid loss degrades after peak.

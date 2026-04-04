@@ -1,0 +1,16 @@
+# ── Data generation ───────────────────────────────────────────────────────────
+openai>=1.30.0          # GPT-4o-mini calls in generate_synthetic.py
+
+# ── Dataset processing ────────────────────────────────────────────────────────
+datasets>=2.19.0        # HuggingFace datasets loader in prepare_sroie.py
+
+# ── Training & inference ──────────────────────────────────────────────────────
+mlx-lm>=0.15.0          # MLX LoRA training (mlx_lm.lora) + inference in baseline_eval.py
+                        # Requires macOS with Apple Silicon (M1/M2/M3)
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+rapidfuzz>=3.9.0        # Fuzzy address matching in baseline_eval.py
+
+# ── Shared utilities ──────────────────────────────────────────────────────────
+tqdm>=4.66.0            # Progress bars in generate_synthetic.py, prepare_sroie.py, baseline_eval.py
+python-dotenv>=1.0.0    # Loads OPENAI_API_KEY and other secrets from .env

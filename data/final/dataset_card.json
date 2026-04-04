@@ -1,0 +1,86 @@
+{
+  "total_examples": 1973,
+  "splits": {
+    "train": {
+      "count": 1579,
+      "source_distribution": {
+        "synthetic_gpt4o_mini": 794,
+        "sroie": 785
+      },
+      "difficulty_distribution": {
+        "hard": 253,
+        "unknown": 785,
+        "easy": 241,
+        "medium": 300
+      },
+      "field_coverage": {
+        "company": 1.0,
+        "date": 0.9968,
+        "address": 0.9994,
+        "total": 0.9994
+      }
+    },
+    "valid": {
+      "count": 197,
+      "source_distribution": {
+        "sroie": 101,
+        "synthetic_gpt4o_mini": 96
+      },
+      "difficulty_distribution": {
+        "unknown": 101,
+        "hard": 31,
+        "easy": 28,
+        "medium": 37
+      },
+      "field_coverage": {
+        "company": 1.0,
+        "date": 1.0,
+        "address": 1.0,
+        "total": 1.0
+      }
+    },
+    "test": {
+      "count": 197,
+      "source_distribution": {
+        "sroie": 87,
+        "synthetic_gpt4o_mini": 110
+      },
+      "difficulty_distribution": {
+        "unknown": 87,
+        "medium": 35,
+        "hard": 34,
+        "easy": 41
+      },
+      "field_coverage": {
+        "company": 1.0,
+        "date": 1.0,
+        "address": 1.0,
+        "total": 1.0
+      }
+    }
+  },
+  "overall": {
+    "source_distribution": {
+      "synthetic_gpt4o_mini": 1000,
+      "sroie": 973
+    },
+    "difficulty_distribution": {
+      "hard": 318,
+      "unknown": 973,
+      "easy": 310,
+      "medium": 372
+    },
+    "field_coverage": {
+      "company": 1.0,
+      "date": 0.9975,
+      "address": 0.9995,
+      "total": 0.9995
+    }
+  },
+  "config": {
+    "random_seed": 42,
+    "train_ratio": 0.8,
+    "valid_ratio": 0.1,
+    "test_ratio": 0.1
+  }
+}
