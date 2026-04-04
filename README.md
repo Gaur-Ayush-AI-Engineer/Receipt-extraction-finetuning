@@ -23,7 +23,7 @@ Fine-tuning **Qwen2.5-3B-Instruct** with LoRA via MLX-LM to extract structured f
 
 All remaining failures after fine-tuning are partial matches — the model always outputs valid JSON and never hallucinates field names.
 
-> **Training loss curve:** MLX-LM does not write a loss log file by default (`report_to: null`). The loss was visible in stdout during training but was not persisted. For future runs, pipe stdout to a file (`mlx_lm.lora --config lora_config.yaml | tee training.log`) or set `report_to: wandb` in `lora_config.yaml` to capture it.
+![Training Loss](results/training_loss.png)
 
 ---
 

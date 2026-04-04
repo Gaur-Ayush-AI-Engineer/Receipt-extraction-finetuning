@@ -12,7 +12,9 @@ End-to-end LoRA fine-tuning pipeline for structured receipt field extraction (co
 - `lora_config.yaml` — MLX-LM training config (rank=8, alpha=16, 16 lora layers, batch=8, 1000 iters, cosine LR with warmup)
 - `baseline_eval.py` — evaluates model before/after fine-tuning, saves detailed results JSON
 - `compare_results.py` — loads baseline + finetuned results, prints table, saves comparison.md
-- `requirements.txt` — all deps including python-dotenv
+- `demo.py` — CLI inference script; supports `--text`, `--example 1/2/3`, and interactive (Ctrl+D) modes
+- `app.py` — Gradio web UI for receipt extraction; run with `python app.py`, opens at localhost:7860
+- `requirements.txt` — all deps, no comments; includes gradio and huggingface_hub
 
 ## Key decisions and why
 
@@ -31,6 +33,10 @@ End-to-end LoRA fine-tuning pipeline for structured receipt field extraction (co
 - `rth/sroie-2019-v2` crashes on iteration without Pillow because of the image column — fixed by `remove_columns(["image"])` right after load
 - `baseline_eval.py` had `--test-data` as `required=True` — changed to use `config.FINAL_TEST` as default so it runs with no args
 - Model default in baseline_eval.py was `Qwen2.5-1.5B-Instruct` — updated to 3B to match the rest of the pipeline
+- MLX-LM does not save a loss log by default (`report_to: null`) — training loss was only visible in stdout and not persisted
+- Gradio 6.0 moved `theme` from `gr.Blocks()` to `launch()` — pass `theme=gr.themes.Soft()` in `demo.launch()` not `gr.Blocks()`
+- HuggingFace username is `largetrader`, not `Gaur-Ayush` — use `largetrader/...` in all `repo_id` values
+- `huggingface-cli` binary may not be on PATH in conda envs — use `python -c "from huggingface_hub import HfApi; ..."` instead
 
 ## Results (training complete)
 
@@ -54,9 +60,12 @@ No regressions. All remaining failures are partial matches (57 examples).
 - LoRA fine-tuning (1000 iters, rank=8)
 - Baseline + finetuned eval
 - Results comparison + markdown
+- CLI demo script (`demo.py`)
+- Gradio web UI (`app.py`) — `python app.py` opens at localhost:7860
+- Adapters pushed to HuggingFace Hub: `largetrader/qwen2.5-3b-receipt-extraction-lora` (26MB)
+- README updated: Dataset Notes, Demo section, Model Weights section, training loss note
+- `__pycache__` untracked from git; `.gitignore` updated
 
 **Adapters saved at:** `./adapters/adapters.safetensors`
+**HuggingFace repo:** https://huggingface.co/largetrader/qwen2.5-3b-receipt-extraction-lora
 
-**Pending (if needed):**
-- Fuse adapters into model: `mlx_lm.fuse --model Qwen/Qwen2.5-3B-Instruct --adapter-path ./adapters --save-path ./fused_model`
-- Inference/demo script for portfolio

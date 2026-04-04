@@ -5,7 +5,8 @@
       "Bash(git -C /Users/ayushgaur/Documents/Fine-tuning ls-files --cached)",
       "Bash(git:*)",
       "Bash(python -c \"import gradio; print\\(gradio.__version__\\)\")",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(ls /Users/ayushgaur/Documents/Fine-tuning/*.log)"
     ]
   }
 }
