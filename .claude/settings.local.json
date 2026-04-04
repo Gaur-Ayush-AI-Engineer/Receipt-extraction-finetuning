@@ -6,7 +6,10 @@
       "Bash(git:*)",
       "Bash(python -c \"import gradio; print\\(gradio.__version__\\)\")",
       "Bash(pip install:*)",
-      "Bash(ls /Users/ayushgaur/Documents/Fine-tuning/*.log)"
+      "Bash(ls /Users/ayushgaur/Documents/Fine-tuning/*.log)",
+      "Bash(mlx_lm.fuse:*)",
+      "Bash(python:*)",
+      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/finenv/bin/python:*)"
     ]
   }
 }
