@@ -2,4 +2,4 @@
 __pycache__/
 *.pyc
 *.pyo
-fused_model/
+fused_model
