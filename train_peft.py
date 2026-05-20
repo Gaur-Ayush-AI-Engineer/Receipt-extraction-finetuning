@@ -47,13 +47,27 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--max-seq-length", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=config.RANDOM_SEED)
+    parser.add_argument(
+        "--precision",
+        choices=["fp16", "bf16"],
+        default="fp16",
+        help="Use fp16 for Colab T4/P100/V100. Use bf16 only on Ampere+ GPUs such as A100/L4.",
+    )
     args = parser.parse_args()
+
+    if args.precision == "bf16" and not torch.cuda.is_bf16_supported():
+        raise RuntimeError(
+            "bf16 was requested, but this GPU does not support bf16. "
+            "Use --precision fp16 on Colab T4/P100/V100."
+        )
+
+    compute_dtype = torch.bfloat16 if args.precision == "bf16" else torch.float16
 
     # ── 4-bit quantization (QLoRA) for T4 ────────────────────────────────────
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_compute_dtype=compute_dtype,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -66,18 +80,19 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model,
         quantization_config=bnb_config,
-        torch_dtype=torch.float16,
+        torch_dtype=compute_dtype,
         device_map="auto",
         trust_remote_code=True,
     )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
-    # Cast any leftover bf16 tensors to float16 — Qwen2.5 defaults to bf16 internally
-    # and prepare_model_for_kbit_training doesn't fully clean them up.
-    # Must happen BEFORE get_peft_model so LoRA adapters are created in float16.
-    for param in model.parameters():
-        if param.dtype == torch.bfloat16:
-            param.data = param.data.to(torch.float16)
+    # On fp16-only GPUs such as Colab T4, bf16 trainable tensors make AMP's
+    # GradScaler fail during gradient unscale/clip. Keep frozen quantized weights
+    # untouched, but ensure any normal parameters are not bf16.
+    if args.precision == "fp16":
+        for param in model.parameters():
+            if param.dtype == torch.bfloat16:
+                param.data = param.data.to(torch.float16)
 
     # ── LoRA config ───────────────────────────────────────────────────────────
     # Qwen2.5-3B has 36 transformer layers (0–35).
@@ -96,11 +111,18 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # PEFT creates LoRA adapters in bf16 by default. T4 doesn't support bf16
-    # and the fp16 grad scaler crashes on bf16 tensors. Cast trainable params only.
+    # PEFT can inherit the base model dtype for adapters. In fp16 mixed precision,
+    # bf16 trainable params create bf16 gradients, which torch's fp16 GradScaler
+    # cannot unscale. Keep adapters in fp32 for stable QLoRA training.
     for param in model.parameters():
-        if param.requires_grad and param.dtype == torch.bfloat16:
-            param.data = param.data.to(torch.float16)
+        if param.requires_grad and param.dtype != torch.float32:
+            param.data = param.data.to(torch.float32)
+
+    trainable_dtypes = {}
+    for param in model.parameters():
+        if param.requires_grad:
+            trainable_dtypes[str(param.dtype)] = trainable_dtypes.get(str(param.dtype), 0) + param.numel()
+    print(f"Trainable parameter dtypes: {trainable_dtypes}")
 
     # ── Data loading & formatting ─────────────────────────────────────────────
     # Pre-format JSONL messages to flat text so SFTTrainer gets a plain "text" field.
@@ -130,8 +152,8 @@ def main():
         learning_rate=args.lr,
         warmup_steps=100,
         lr_scheduler_type="cosine",
-        bf16=False,
-        fp16=True,
+        bf16=args.precision == "bf16",
+        fp16=args.precision == "fp16",
         gradient_checkpointing=True,
         logging_steps=10,
         eval_strategy="steps",
