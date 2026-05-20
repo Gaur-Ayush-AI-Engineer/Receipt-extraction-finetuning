@@ -53,7 +53,7 @@ def main():
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_compute_dtype=torch.float16,
         bnb_4bit_use_double_quant=True,
     )
 
@@ -117,7 +117,8 @@ def main():
         learning_rate=args.lr,
         warmup_steps=100,
         lr_scheduler_type="cosine",
-        bf16=True,
+        bf16=False,
+        fp16=True,
         gradient_checkpointing=True,
         logging_steps=10,
         eval_strategy="steps",
