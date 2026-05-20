@@ -127,7 +127,7 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         seed=args.seed,
-        max_seq_length=args.max_seq_length,
+        max_length=args.max_seq_length,
         dataset_text_field="text",
         report_to="none",
     )
@@ -137,7 +137,7 @@ def main():
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=valid_dataset,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     print("Starting training...")
