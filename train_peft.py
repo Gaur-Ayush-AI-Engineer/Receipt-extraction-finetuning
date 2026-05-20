@@ -117,7 +117,7 @@ def main():
         learning_rate=args.lr,
         warmup_steps=100,
         lr_scheduler_type="cosine",
-        fp16=True,
+        fp16=False,
         gradient_checkpointing=True,
         logging_steps=10,
         eval_strategy="steps",
