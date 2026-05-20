@@ -96,6 +96,12 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
+    # PEFT creates LoRA adapters in bf16 by default. T4 doesn't support bf16
+    # and the fp16 grad scaler crashes on bf16 tensors. Cast trainable params only.
+    for param in model.parameters():
+        if param.requires_grad and param.dtype == torch.bfloat16:
+            param.data = param.data.to(torch.float16)
+
     # ── Data loading & formatting ─────────────────────────────────────────────
     # Pre-format JSONL messages to flat text so SFTTrainer gets a plain "text" field.
     def fmt(example):
