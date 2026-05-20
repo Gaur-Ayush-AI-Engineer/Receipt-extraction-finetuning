@@ -72,6 +72,13 @@ def main():
     )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
+    # Cast any leftover bf16 tensors to float16 — Qwen2.5 defaults to bf16 internally
+    # and prepare_model_for_kbit_training doesn't fully clean them up.
+    # Must happen BEFORE get_peft_model so LoRA adapters are created in float16.
+    for param in model.parameters():
+        if param.dtype == torch.bfloat16:
+            param.data = param.data.to(torch.float16)
+
     # ── LoRA config ───────────────────────────────────────────────────────────
     # Qwen2.5-3B has 36 transformer layers (0–35).
     # layers_to_transform=[20..35] mirrors MLX lora_layers=16 (last 16 layers).
