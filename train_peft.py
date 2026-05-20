@@ -1,6 +1,6 @@
 """
 train_peft.py — LoRA fine-tuning with HuggingFace PEFT + TRL SFTTrainer
-Target: NVIDIA GPU (Colab T4, 15 GB VRAM) using 4-bit QLoRA
+Target: NVIDIA GPU using 4-bit QLoRA
 
 Hyperparameters match the original MLX-LM run:
   rank=8, alpha=16, dropout=0.05, last 16 of 36 layers
@@ -8,6 +8,7 @@ Hyperparameters match the original MLX-LM run:
 
 Usage:
     python train_peft.py
+    python train_peft.py --precision bf16
     python train_peft.py --epochs 10 --output-dir ./adapters
 """
 
@@ -50,20 +51,20 @@ def main():
     parser.add_argument(
         "--precision",
         choices=["fp16", "bf16"],
-        default="fp16",
-        help="Use fp16 for Colab T4/P100/V100. Use bf16 only on Ampere+ GPUs such as A100/L4.",
+        default="bf16",
+        help="Use bf16 on supported GPUs. Use fp16 for older GPUs that do not support bf16.",
     )
     args = parser.parse_args()
 
     if args.precision == "bf16" and not torch.cuda.is_bf16_supported():
         raise RuntimeError(
             "bf16 was requested, but this GPU does not support bf16. "
-            "Use --precision fp16 on Colab T4/P100/V100."
+            "Use --precision fp16 on this machine."
         )
 
     compute_dtype = torch.bfloat16 if args.precision == "bf16" else torch.float16
 
-    # ── 4-bit quantization (QLoRA) for T4 ────────────────────────────────────
+    # ── 4-bit quantization (QLoRA) ───────────────────────────────────────────
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -86,9 +87,9 @@ def main():
     )
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
 
-    # On fp16-only GPUs such as Colab T4, bf16 trainable tensors make AMP's
-    # GradScaler fail during gradient unscale/clip. Keep frozen quantized weights
-    # untouched, but ensure any normal parameters are not bf16.
+    # On fp16-only GPUs, bf16 trainable tensors make AMP's GradScaler fail during
+    # gradient unscale/clip. Keep frozen quantized weights untouched, but ensure
+    # any normal parameters follow the selected precision.
     if args.precision == "fp16":
         for param in model.parameters():
             if param.dtype == torch.bfloat16:
@@ -111,12 +112,11 @@ def main():
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    # PEFT can inherit the base model dtype for adapters. In fp16 mixed precision,
-    # bf16 trainable params create bf16 gradients, which torch's fp16 GradScaler
-    # cannot unscale. Keep adapters in fp32 for stable QLoRA training.
+    # PEFT can inherit a different dtype for adapters. Keep trainable LoRA params
+    # aligned with the selected mixed precision path.
     for param in model.parameters():
-        if param.requires_grad and param.dtype != torch.float32:
-            param.data = param.data.to(torch.float32)
+        if param.requires_grad and param.dtype != compute_dtype:
+            param.data = param.data.to(compute_dtype)
 
     trainable_dtypes = {}
     for param in model.parameters():
