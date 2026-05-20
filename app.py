@@ -5,7 +5,9 @@ Run: python app.py
 
 import json
 import gradio as gr
-from mlx_lm import load, generate
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import PeftModel
 import config
 
 # ── Example receipts ──────────────────────────────────────────────────────────
@@ -15,8 +17,36 @@ EXAMPLES = [
     ["*** SHREE GANESH KIRANA ***\nopp. bus stand, nagar road, pune 411014\ndt.22/11/23  inv#1847\n2    aata 10kg         1160\n3    dal chana          285\n1    sarso oil 2ltr     210\n                    --------\ntotal                  1722\ncash paid              1800"],
 ]
 
+
+def _load_model():
+    if torch.cuda.is_available():
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        m = AutoModelForCausalLM.from_pretrained(
+            config.MODEL, quantization_config=bnb_config, device_map="auto", trust_remote_code=True
+        )
+    elif torch.backends.mps.is_available():
+        m = AutoModelForCausalLM.from_pretrained(
+            config.MODEL, torch_dtype=torch.float16, device_map="mps", trust_remote_code=True
+        )
+    else:
+        m = AutoModelForCausalLM.from_pretrained(
+            config.MODEL, torch_dtype=torch.float32, device_map="cpu", trust_remote_code=True
+        )
+    m = PeftModel.from_pretrained(m, config.ADAPTERS_DIR)
+    m.eval()
+    tok = AutoTokenizer.from_pretrained(config.MODEL, trust_remote_code=True)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    return m, tok
+
+
 print(f"Loading model {config.MODEL}...")
-model, tokenizer = load(config.MODEL, adapter_path=config.ADAPTERS_DIR)
+model, tokenizer = _load_model()
 print("Model ready.")
 
 
@@ -29,7 +59,15 @@ def extract(receipt_text: str):
         {"role": "user", "content": f"Extract structured fields from this receipt:\n\n{receipt_text}"},
     ]
     prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    raw = generate(model, tokenizer, prompt=prompt, max_tokens=200, verbose=False)
+
+    device = next(model.parameters()).device
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs, max_new_tokens=200, do_sample=False, pad_token_id=tokenizer.eos_token_id
+        )
+    new_tokens = output_ids[0][inputs.input_ids.shape[1]:]
+    raw = tokenizer.decode(new_tokens, skip_special_tokens=True)
 
     try:
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()

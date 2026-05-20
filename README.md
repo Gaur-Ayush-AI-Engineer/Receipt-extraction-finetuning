@@ -1,6 +1,6 @@
-# Receipt Field Extraction — LoRA Fine-tuning on Apple Silicon
+# Receipt Field Extraction — LoRA Fine-tuning (PEFT + TRL)
 
-Fine-tuning **Qwen2.5-3B-Instruct** with LoRA via MLX-LM to extract structured fields from receipt OCR text. Trained entirely on an M3 Pro 32GB Mac — no cloud GPUs.
+Fine-tuning **Qwen2.5-3B-Instruct** with QLoRA (4-bit + rank-8 LoRA) via HuggingFace PEFT + TRL SFTTrainer to extract structured fields from receipt OCR text. Runs on Google Colab T4 (15 GB VRAM).
 
 **Task:** Given raw OCR text from a receipt, extract:
 ```json
@@ -50,20 +50,24 @@ Two sources merged into a single dataset (~1950 examples):
 
 ```bash
 git clone <repo>
-cd Fine-tuning
+cd receipt-extraction
 pip install -r requirements.txt
 ```
 
-Requires **Apple Silicon Mac** (M1/M2/M3) — MLX only runs on Apple Silicon.
-
-Add your OpenAI key to a `.env` file:
+Add your OpenAI key to a `.env` file (only needed for synthetic data generation):
 ```
 OPENAI_API_KEY=sk-...
 ```
 
 ---
 
-## Training Pipeline
+## Training on Google Colab T4
+
+Open `colab_train.ipynb` in Colab (Runtime → T4 GPU), add your `HF_TOKEN` to Colab Secrets, and run all cells. The notebook handles data prep, training, evaluation, and pushing adapters to HuggingFace Hub.
+
+---
+
+## Training Pipeline (local / manual)
 
 ```bash
 # 1. Generate synthetic Indian receipt data
@@ -75,8 +79,8 @@ python prepare_sroie.py
 # 3. Merge datasets and create train/valid/test splits
 python merge_datasets.py
 
-# 4. Fine-tune with LoRA
-mlx_lm.lora --config lora_config.yaml
+# 4. Fine-tune with QLoRA (requires NVIDIA GPU)
+python train_peft.py
 
 # 5. Evaluate baseline (before fine-tuning)
 python baseline_eval.py
@@ -98,14 +102,14 @@ All paths and hyperparameters are configured in `config.py` — edit that file, 
 
 | Parameter | Value | Reason |
 |-----------|-------|--------|
-| Base model | Qwen2.5-3B-Instruct | Strong instruction following, fits in 32GB |
-| Method | LoRA | Efficient fine-tuning, ~6.6M trainable params (0.2%) |
+| Base model | Qwen2.5-3B-Instruct | Strong instruction following |
+| Method | QLoRA (4-bit NF4 + LoRA) | Fits 3B model in T4's 15 GB VRAM |
 | Rank | 8 | Sufficient for constrained extraction task, less overfitting risk |
 | Alpha | 16 | Standard 2× rank scaling |
-| LoRA layers | 16 of 36 | Covers output-side layers responsible for formatting |
-| Batch size | 8 | Fits in ~16GB peak memory |
-| Iterations | 1000 | ~10 epochs over training set |
-| Learning rate | 1e-4 with cosine decay | Standard LoRA LR, warmup for 100 steps |
+| LoRA layers | Last 16 of 36 | Covers output-side layers responsible for formatting |
+| Effective batch size | 8 (4 per-device × 2 grad-accum) | Matches original MLX run |
+| Epochs | 10 | ≈ 1000 iterations at batch 8 over ~800 training examples |
+| Learning rate | 1e-4 cosine with 100-step warmup | Standard LoRA LR |
 | Max seq length | 1024 | Receipt OCR + response fits comfortably |
 
 ---
@@ -121,18 +125,22 @@ LoRA adapters are published on HuggingFace Hub: **[largetrader/qwen2.5-3b-receip
 ```
 .
 ├── config.py                  # All variables — edit here
+├── train_peft.py              # QLoRA training (PEFT + TRL, GPU)
+├── colab_train.ipynb          # End-to-end Colab T4 notebook
+├── baseline_eval.py           # Before/after evaluation (transformers + PEFT)
+├── compare_results.py         # Results comparison + markdown output
+├── demo.py                    # CLI inference demo
+├── app.py                     # Gradio web UI (python app.py → localhost:7860)
 ├── generate_synthetic.py      # GPT-4o-mini synthetic data generation
 ├── prepare_sroie.py           # SROIE dataset processing
 ├── merge_datasets.py          # Dataset merging + stratified split
-├── baseline_eval.py           # Before/after evaluation
-├── compare_results.py         # Results comparison + markdown output
-├── lora_config.yaml           # MLX-LM LoRA training config
+├── lora_config.yaml           # Legacy MLX-LM config (kept for reference)
 ├── requirements.txt
 ├── data/
 │   ├── synthetic/             # Generated Indian receipt data
 │   ├── sroie/                 # Processed SROIE data
 │   └── final/mlx_format/      # train.jsonl, valid.jsonl, test.jsonl
-├── adapters/                  # Saved LoRA adapter weights
+├── adapters/                  # Saved PEFT adapter weights
 └── results/
     ├── baseline_results.json
     ├── finetuned_results.json
@@ -144,9 +152,15 @@ LoRA adapters are published on HuggingFace Hub: **[largetrader/qwen2.5-3b-receip
 ## Inference
 
 ```python
-from mlx_lm import load, generate
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
-model, tokenizer = load("Qwen/Qwen2.5-3B-Instruct", adapter_path="./adapters")
+base = AutoModelForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-3B-Instruct", torch_dtype=torch.float16, device_map="auto"
+)
+model = PeftModel.from_pretrained(base, "./adapters")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B-Instruct")
 
 messages = [
     {"role": "system", "content": "You are a structured data extraction assistant. Given raw OCR text from a receipt, extract the fields as a JSON object with keys: company, date, address, total. date must be YYYY-MM-DD. total must be numeric string only. If a field is missing, use empty string."},
@@ -154,17 +168,11 @@ messages = [
 ]
 
 prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-response = generate(model, tokenizer, prompt=prompt, max_tokens=200)
-print(response)
+inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+with torch.no_grad():
+    out = model.generate(**inputs, max_new_tokens=200, do_sample=False)
+print(tokenizer.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True))
 # {"company": "SUPERMART", "date": "2024-03-12", "address": "123 MG Road, Bengaluru", "total": "847.00"}
-```
-
-Or fuse the adapters permanently:
-```bash
-mlx_lm.fuse \
-    --model Qwen/Qwen2.5-3B-Instruct \
-    --adapter-path ./adapters \
-    --save-path ./fused_model
 ```
 
 ---

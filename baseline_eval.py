@@ -10,19 +10,12 @@ Metrics:
 - Overall score
 
 Usage:
-    pip install mlx-lm rapidfuzz tqdm
-
     # Before fine-tuning (baseline):
-    python baseline_eval.py \
-        --model Qwen/Qwen2.5-1.5B-Instruct \
-        --test-data ./data/synthetic/mlx_format/test.jsonl \
-        --output ./results/baseline_results.json
+    python baseline_eval.py
 
-    # After fine-tuning:
+    # After fine-tuning (PEFT adapters):
     python baseline_eval.py \
-        --model Qwen/Qwen2.5-1.5B-Instruct \
         --adapter-path ./adapters \
-        --test-data ./data/synthetic/mlx_format/test.jsonl \
         --output ./results/finetuned_results.json
 """
 
@@ -32,7 +25,9 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 from rapidfuzz import fuzz
-from mlx_lm import load, generate
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from peft import PeftModel
 import config
 
 SYSTEM_PROMPT = config.SYSTEM_PROMPT
@@ -114,6 +109,50 @@ def score_example(pred: dict, gt: dict) -> dict:
     return scores
 
 
+def _get_device(model) -> str:
+    return next(model.parameters()).device
+
+
+def load_model(model_name: str, adapter_path: str | None = None):
+    """Load model with 4-bit quantization on CUDA, float16 on MPS, float32 on CPU."""
+    if torch.cuda.is_available():
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            quantization_config=bnb_config,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+    elif torch.backends.mps.is_available():
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="mps",
+            trust_remote_code=True,
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float32,
+            device_map="cpu",
+            trust_remote_code=True,
+        )
+
+    if adapter_path:
+        model = PeftModel.from_pretrained(model, adapter_path)
+
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
+
+
 def build_prompt(tokenizer, ocr_text: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -124,6 +163,20 @@ def build_prompt(tokenizer, ocr_text: str) -> str:
         tokenize=False,
         add_generation_prompt=True,
     )
+
+
+def _generate(model, tokenizer, prompt: str, max_new_tokens: int = 300) -> str:
+    device = _get_device(model)
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    new_tokens = output_ids[0][inputs.input_ids.shape[1]:]
+    return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
 # ── Main eval loop ────────────────────────────────────────────────────────────
@@ -147,13 +200,7 @@ def run_eval(model, tokenizer, test_data: list[dict], max_tokens: int = 300) -> 
 
         # Build prompt and generate
         prompt = build_prompt(tokenizer, ocr_text)
-        raw_output = generate(
-            model,
-            tokenizer,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            verbose=False,
-        )
+        raw_output = _generate(model, tokenizer, prompt, max_new_tokens=max_tokens)
 
         # Parse prediction
         pred = extract_json_from_response(raw_output)
@@ -242,8 +289,8 @@ def main():
     # Load model
     print(f"\nLoading model: {args.model}")
     if args.adapter_path:
-        print(f"Loading adapters: {args.adapter_path}")
-    model, tokenizer = load(args.model, adapter_path=args.adapter_path)
+        print(f"Loading PEFT adapters: {args.adapter_path}")
+    model, tokenizer = load_model(args.model, adapter_path=args.adapter_path)
 
     # Load test data
     test_data = []
