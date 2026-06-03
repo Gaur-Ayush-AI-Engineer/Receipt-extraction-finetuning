@@ -9,7 +9,13 @@
       "Bash(ls /Users/ayushgaur/Documents/Fine-tuning/*.log)",
       "Bash(mlx_lm.fuse:*)",
       "Bash(python:*)",
-      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/finenv/bin/python:*)"
+      "Bash(/opt/homebrew/Caskroom/miniconda/base/envs/finenv/bin/python:*)",
+      "Bash(rm /Users/ayushgaur/Documents/Receipt-extraction-finetuning/lora_config.yaml \\\\ *)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/Users/ayushgaur/Documents/Receipt-extraction-finetuning/results/finetuned_vast_results.json'\\)\\); print\\('model:', d['model']\\); print\\('adapter:', d['adapter_path']\\); print\\('summary:', d['summary']\\)\")",
+      "Bash(python3 -c ' *)"
+    ],
+    "additionalDirectories": [
+      "/Users/ayushgaur/Documents/Receipt-extraction-finetuning"
     ]
   }
 }

@@ -1,6 +1,6 @@
 # Receipt Field Extraction — LoRA Fine-tuning (PEFT + TRL)
 
-Fine-tuning **Qwen2.5-3B-Instruct** with QLoRA (4-bit + rank-8 LoRA) via HuggingFace PEFT + TRL SFTTrainer to extract structured fields from receipt OCR text. Runs on Google Colab T4 (15 GB VRAM).
+Fine-tuning **Qwen2.5-3B-Instruct** with QLoRA (4-bit + rank-8 LoRA) via HuggingFace PEFT + TRL SFTTrainer to extract structured fields from receipt OCR text. Trained on an NVIDIA RTX 3090 (Vast.ai).
 
 **Task:** Given raw OCR text from a receipt, extract:
 ```json
@@ -11,19 +11,34 @@ Fine-tuning **Qwen2.5-3B-Instruct** with QLoRA (4-bit + rank-8 LoRA) via Hugging
 
 ## Results
 
+Evaluated on 197 held-out examples after fine-tuning on RTX 3090 (Vast.ai):
+
 | Field | Baseline | Fine-tuned | Delta |
 |:------|--------:|----------:|------:|
-| Company | 75.1% | 90.4% | +15.2% |
-| Date | 53.3% | 98.0% | +44.7% |
-| Address (exact) | 47.7% | 77.2% | +29.4% |
-| Address (fuzzy) | 94.6% | 97.7% | +3.1% |
-| Total | 89.3% | 98.0% | +8.6% |
-| **All fields correct** | **32.5%** | **71.1%** | **+38.6%** |
+| Company | 75.1% | 87.3% | +12.2% |
+| Date | 53.3% | 97.5% | +44.2% |
+| Address (exact) | 47.7% | 69.0% | +21.3% |
+| Address (fuzzy) | 94.6% | 97.0% | +2.4% |
+| Total | 89.3% | 96.9% | +7.6% |
+| **All fields correct** | **32.5%** | **60.4%** | **+27.9%** |
 | JSON parse failures | 0.5% | 0.0% | -0.5% |
 
-All remaining failures after fine-tuning are partial matches — the model always outputs valid JSON and never hallucinates field names.
+The model always outputs valid JSON and never hallucinates field names.
 
 ![Training Loss](results/training_loss.png)
+
+### Failure Analysis
+
+78 of 197 examples (39.6%) have at least one wrong field. Address is the dominant failure — 61 of 78 failures (78%) are address-only. Date and total are effectively solved at 2.5% and 3.0% error rates.
+
+| Field | Error Rate | Primary failure mode |
+|:------|----------:|:---------------------|
+| Address | 31.0% | Wrong value (65%) — punctuation normalization, multi-line OCR bleeding store name into address |
+| Company | 12.7% | Wrong value (76%) — formatting differences |
+| Total | 3.0% | Wrong value / partial |
+| Date | 2.5% | Wrong value — date format edge cases |
+
+SROIE (Malaysian real receipts) and synthetic (Indian) fail at nearly the same rate — 37% vs 41.5% — meaning the failure is structural (address formatting ambiguity in OCR) rather than domain-specific. See [`results/failure_analysis.md`](results/failure_analysis.md) for full breakdown.
 
 ---
 
@@ -61,13 +76,7 @@ OPENAI_API_KEY=sk-...
 
 ---
 
-## Training on Google Colab T4
-
-Open `colab_train.ipynb` in Colab (Runtime → T4 GPU), add your `HF_TOKEN` to Colab Secrets, and run all cells. The notebook handles data prep, training, evaluation, and pushing adapters to HuggingFace Hub.
-
----
-
-## Training Pipeline (local / manual)
+## Training Pipeline
 
 ```bash
 # 1. Generate synthetic Indian receipt data
@@ -92,6 +101,9 @@ python baseline_eval.py \
 
 # 7. Compare results
 python compare_results.py
+
+# 8. Failure analysis
+python failure_analysis.py
 ```
 
 All paths and hyperparameters are configured in `config.py` — edit that file, not the scripts.
@@ -126,25 +138,24 @@ LoRA adapters are published on HuggingFace Hub: **[largetrader/qwen2.5-3b-receip
 .
 ├── config.py                  # All variables — edit here
 ├── train_peft.py              # QLoRA training (PEFT + TRL, GPU)
-├── colab_train.ipynb          # End-to-end Colab T4 notebook
 ├── baseline_eval.py           # Before/after evaluation (transformers + PEFT)
 ├── compare_results.py         # Results comparison + markdown output
-├── demo.py                    # CLI inference demo
+├── failure_analysis.py        # Categorize failures by field, source, error type
+├── demo.py                    # CLI inference demo (with per-field confidence scores)
 ├── app.py                     # Gradio web UI (python app.py → localhost:7860)
 ├── generate_synthetic.py      # GPT-4o-mini synthetic data generation
 ├── prepare_sroie.py           # SROIE dataset processing
 ├── merge_datasets.py          # Dataset merging + stratified split
-├── lora_config.yaml           # Legacy MLX-LM config (kept for reference)
 ├── requirements.txt
 ├── data/
 │   ├── synthetic/             # Generated Indian receipt data
 │   ├── sroie/                 # Processed SROIE data
 │   └── final/mlx_format/      # train.jsonl, valid.jsonl, test.jsonl
-├── adapters/                  # Saved PEFT adapter weights
 └── results/
     ├── baseline_results.json
-    ├── finetuned_results.json
-    └── comparison.md
+    ├── finetuned_vast_results.json
+    ├── failure_analysis.md    # Per-field and per-source failure breakdown
+    └── training_loss.png
 ```
 
 ---
@@ -189,3 +200,14 @@ python demo.py --text "YOUR RECEIPT TEXT HERE"
 # Interactive mode — paste text, end with Ctrl+D
 python demo.py
 ```
+
+Each field is printed with a confidence score derived from token log-probabilities:
+
+```
+company   : RELIANCE FRESH                            [HIGH 94%]
+date      : 2024-03-15                                [HIGH 98%]
+address   : 12, MG Road, Bengaluru - 560001           [MED  81%]
+total     : 263.00                                    [HIGH 96%]
+```
+
+Fields below 70% confidence are flagged with a warning — useful for catching extractions that should be verified manually.

@@ -102,29 +102,83 @@ def build_prompt(tokenizer: object, receipt_text: str) -> str:
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
 
+def _field_confidence(field_value: str, token_ids: list, log_probs: list, tokenizer) -> float:
+    """
+    Returns mean token probability (0–1) for the tokens that encode field_value.
+    Searches for the token subsequence matching the value inside the generated output.
+    Falls back to overall mean if the subsequence is not found.
+    """
+    if not field_value or not log_probs:
+        return 0.0
+
+    value_ids = tokenizer.encode(str(field_value), add_special_tokens=False)
+    # Sliding window search for the value token subsequence
+    n = len(value_ids)
+    for i in range(len(token_ids) - n + 1):
+        if token_ids[i : i + n] == value_ids:
+            probs = [p.exp().item() for p in log_probs[i : i + n]]
+            return sum(probs) / len(probs)
+
+    # Fallback: mean over all tokens
+    return sum(p.exp().item() for p in log_probs) / len(log_probs)
+
+
+def _confidence_label(score: float) -> str:
+    if score >= 0.90:
+        return "HIGH"
+    if score >= 0.70:
+        return "MED"
+    return "LOW"
+
+
 def extract_and_print(model, tokenizer, receipt_text: str) -> None:
     prompt = build_prompt(tokenizer, receipt_text)
     device = next(model.parameters()).device
     inputs = tokenizer(prompt, return_tensors="pt").to(device)
+
     with torch.no_grad():
-        output_ids = model.generate(
-            **inputs, max_new_tokens=200, do_sample=False, pad_token_id=tokenizer.eos_token_id
+        out = model.generate(
+            **inputs,
+            max_new_tokens=200,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
         )
-    new_tokens = output_ids[0][inputs.input_ids.shape[1]:]
-    raw = tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    new_token_ids = out.sequences[0][inputs.input_ids.shape[1]:].tolist()
+    # scores is a tuple of (vocab_size,) tensors, one per generated token
+    log_probs = [
+        torch.log_softmax(score[0], dim=-1)[tid]
+        for score, tid in zip(out.scores, new_token_ids)
+    ]
+
+    raw = tokenizer.decode(new_token_ids, skip_special_tokens=True)
 
     print("\n--- Receipt Text ---")
     print(receipt_text.strip())
     print("\n--- Extracted Fields ---")
 
     try:
-        # Strip markdown fences if present
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         data = json.loads(cleaned)
+
+        confidences = {}
         for field in config.FIELDS:
-            print(f"  {field:<10}: {data.get(field, '')}")
+            value = data.get(field, "")
+            conf  = _field_confidence(value, new_token_ids, log_probs, tokenizer)
+            confidences[field] = conf
+            label = _confidence_label(conf)
+            flag  = "  ⚠ low confidence" if label == "LOW" else ""
+            print(f"  {field:<10}: {value:<40}  [{label} {conf:.0%}]{flag}")
+
         print("\n--- Full JSON ---")
         print(json.dumps(data, indent=2))
+
+        low_conf = [f for f, c in confidences.items() if c < 0.70]
+        if low_conf:
+            print(f"\n[WARNING] Low-confidence fields: {', '.join(low_conf)} — verify manually.")
+
     except json.JSONDecodeError:
         print("  [WARNING] Could not parse model output as JSON. Raw output:")
         print(raw)
